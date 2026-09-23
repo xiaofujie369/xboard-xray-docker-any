@@ -76,8 +76,9 @@ class RouteTests(unittest.TestCase):
         result = build([{'action': 'proxy', 'match': ['*.test'], 'action_value': 'relay'}],
                        {'outbounds': [{'type': 'direct', 'tag': 'relay'}]})
         self.assertEqual(result['route']['rules'][0]['outbound'], 'relay')
-        with self.assertRaises(routes.RouteError):
-            build([{'action': 'proxy', 'match': ['*'], 'action_value': 'missing'}])
+        with self.assertWarns(UserWarning):
+            result = build([{'action': 'proxy', 'match': ['*'], 'action_value': 'missing'}])
+        self.assertNotIn('rules', result['route'])
 
     def test_dns_address_forms(self):
         for address, kind in [('223.5.5.5', 'udp'), ('2400:3200::1', 'udp'),
@@ -90,15 +91,42 @@ class RouteTests(unittest.TestCase):
                          ['1.1.1.1', '8.8.8.8', '2400:3200::1'])
 
     def test_invalid_does_not_echo_secret(self):
-        with self.assertRaises(routes.RouteError) as error:
-            build([{'action': 'dns', 'match': ['*'], 'action_value': 'https://secret:token@dns.test'}])
-        self.assertNotIn('token', str(error.exception))
-        self.assertIn('节点 1 第 1 条路由', str(error.exception))
+        with warnings.catch_warnings(record=True) as caught:
+            result = build([{'action': 'dns', 'match': ['*'], 'action_value': 'https://secret:token@dns.test'}])
+        self.assertNotIn('token', str(caught[0].message))
+        self.assertIn('节点 1 第 1 条路由', str(caught[0].message))
+        self.assertNotIn('dns', result)
 
-    def test_unsupported_match_fails_closed(self):
+    def test_unsupported_match_skipped(self):
         for match in ('geosite:cn', 'geoip:cn', 'unsupported:foo'):
-            with self.subTest(match=match), self.assertRaises(routes.RouteError):
-                build([{'action': 'block', 'match': [match]}])
+            with self.subTest(match=match), self.assertWarns(UserWarning):
+                result = build([{'action': 'block', 'match': [match]}])
+                self.assertNotIn('rules', result['route'])
+
+    def test_invalid_item_preserves_valid_siblings(self):
+        with self.assertWarns(UserWarning):
+            result = build([{'action': 'dns', 'match': ['good.test', 'invalid:prefix', '*.valid.test'],
+                             'action_value': '1.1.1.1'}])
+        self.assertEqual(result['dns']['rules'][0]['domain_suffix'], ['good.test', 'valid.test'])
+
+    def test_invalid_rule_does_not_drop_other_rules(self):
+        with self.assertWarns(UserWarning):
+            result = build([{'action': 'unknown', 'match': ['*']},
+                            {'action': 'block', 'match': ['bad.test']}])
+        self.assertEqual(result['route']['rules'][0]['action'], 'reject')
+
+    def test_bad_first_dns_uses_valid_second(self):
+        with self.assertWarns(UserWarning):
+            result = build([{'action': 'dns', 'match': ['*'],
+                             'action_value': 'https://secret:token@bad.test,1.1.1.1'}])
+        self.assertEqual(result['dns']['rules'][0]['server'], 'xbs-1-dns-0-1')
+        self.assertEqual(len(result['dns']['servers']), 2)
+
+    def test_malformed_list_keeps_inbound(self):
+        with self.assertWarns(UserWarning):
+            result = build('not json')
+        self.assertEqual(len(result['inbounds']), 1)
+        self.assertNotIn('rules', result['route'])
 
     def test_local_settings_preserved(self):
         local = {'dns': {'servers': [{'type': 'local', 'tag': 'mine'}], 'final': 'mine'},

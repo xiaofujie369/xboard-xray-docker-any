@@ -94,6 +94,37 @@ def dns_addresses(value):
     return result
 
 
+def warn_skip(context, error):
+    detail = str(error) if isinstance(error, RouteError) else '字段格式无效'
+    warnings.warn(f'{context}: 已跳过无效项（{detail}）；被跳过的规则不生效，节点继续初始化', stacklevel=3)
+
+
+def tolerant_matchers(value, dns, context):
+    if isinstance(value, str):
+        value = json.loads(value) if value.lstrip().startswith('[') else value.splitlines()
+    if not isinstance(value, list):
+        raise RouteError('路由 match 必须是数组或多行文本')
+    groups, wildcard = {}, False
+    number = 0
+    for line in value:
+        for item in line.splitlines() if isinstance(line, str) else [line]:
+            number += 1
+            try:
+                matches, all_targets = matchers([item], dns=dns)
+            except (ValueError, TypeError, RouteError) as error:
+                warn_skip(f'{context} 匹配项 {number}', error)
+                continue
+            wildcard |= all_targets
+            for match in matches:
+                for field, values in match.items():
+                    if isinstance(values, bool):
+                        groups[field] = values
+                    else:
+                        group = groups.setdefault(field, [])
+                        group.extend(v for v in values if v not in group)
+    return [{field: value} for field, value in groups.items()], wildcard
+
+
 def dns_server(address, tag):
     if address in ('local', 'localhost'):
         return {'type': 'local', 'tag': tag}
@@ -140,14 +171,20 @@ def apply(result, panels):
         if inbound not in active:
             continue
         raw = server.get('routes', server.get('route_rules', server.get('routeRules')))
-        for index, rule in enumerate(entries(raw)):
+        try:
+            rules = entries(raw)
+        except (ValueError, TypeError, RouteError) as error:
+            warn_skip(f'节点 {node} 路由列表', error)
+            continue
+        for index, rule in enumerate(rules):
+            context = f'节点 {node} 第 {index + 1} 条路由'
             try:
                 if not isinstance(rule, dict):
                     raise RouteError('路由必须是对象')
                 action = str(rule.get('action', '')).lower().strip()
                 if action not in ('block', 'reject', 'direct', 'proxy', 'dns'):
                     raise RouteError('不支持的面板路由动作')
-                matches, wildcard = matchers(rule.get('match', []), dns=action == 'dns')
+                matches, wildcard = tolerant_matchers(rule.get('match', []), action == 'dns', context)
                 if not matches and not wildcard:
                     continue  # Empty/comment-only groups never become match-all rules.
                 scope = {'inbound': [inbound]}
@@ -156,8 +193,15 @@ def apply(result, panels):
                     tags = []
                     for number, address in enumerate(addresses):
                         tag = f'xbs-{node}-dns-{index}-{number}'
-                        resolvers.append(dns_server(address, tag))
+                        try:
+                            resolver = dns_server(address, tag)
+                        except (ValueError, TypeError, RouteError) as error:
+                            warn_skip(f'{context} DNS 地址 {number + 1}', error)
+                            continue
+                        resolvers.append(resolver)
                         tags.append(tag)
+                    if not tags:
+                        continue
                     if len(tags) > 1:
                         warnings.warn(f'节点 {node} DNS 路由 {index + 1}: 多个 DNS 地址已导入，'
                                       '当前使用列表第一个；sing-box 1.12 不提供该列表的自动故障转移', stacklevel=2)
@@ -174,8 +218,7 @@ def apply(result, panels):
                     traffic_rules.extend({**scope, **match, **target} for match in ([{}] if wildcard else matches))
             except (ValueError, TypeError, RouteError) as error:
                 # Preserve safe, specific compiler errors, never echo raw panel payloads.
-                detail = str(error) if isinstance(error, RouteError) else '字段格式无效'
-                raise RouteError(f'节点 {node} 第 {index + 1} 条路由: {detail}') from None
+                warn_skip(context, error)
     if resolvers:
         dns = result.setdefault('dns', {})
         existing = dns.setdefault('servers', [])

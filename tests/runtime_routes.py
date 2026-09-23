@@ -78,7 +78,7 @@ def main():
             dns_address = lambda n: f'udp://127.0.0.1:{servers[n].server_address[1]}'
             panels = {'1': {'server_port': 20981, 'listen_ip': '127.0.0.1', 'routes': [
                 {'action': 'dns', 'match': ['*', '::/0'], 'action_value': dns_address(1)},
-                {'action': 'dns', 'match': ['# 电商域名', '*.taobao.test'], 'action_value': dns_address(0)},
+                {'action': 'dns', 'match': ['# 电商域名', '*.taobao.test', 'unsupported:invalid'], 'action_value': dns_address(0)},
                 {'action': 'direct', 'match': ['full:allowed.blocked.test']},
                 {'action': 'block', 'match': ['blocked.test']}]},
                 '2': {'server_port': 20983, 'listen_ip': '127.0.0.1', 'routes': [
