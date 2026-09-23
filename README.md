@@ -1,437 +1,139 @@
-# XBoard Xray Docker Sync
+# XBoard sing-box Docker Sync
 
-Official xray-core Docker deployment with XBoard panel sync and traffic report.
+基于 [xboard-xray-docker-sync](https://github.com/xiaofujie369/xboard-xray-docker-sync) 的独立 sing-box 版本。使用官方 sing-box 源码构建 Docker 核心，以 Python 对接 XBoard：同步节点配置、同步用户、按用户统计上传/下载流量、向面板上报节点状态。
 
-This project does not use Xboard-Node, V2bX, or XrayR. It uses official xray-core plus lightweight Python sync/report scripts.
+## 协议
 
-## Features
+| 面板节点 | NODES 写法 | 支持范围 |
+| --- | --- | --- |
+| AnyTLS | `101:anytls` | 多用户、TLS、padding_scheme |
+| Hysteria2 | `102:hysteria2` 或 `102:hysteria` | 自动使用 XBoard `hysteria` API，version=2、带宽、Salamander |
+| TUIC | `103:tuic` | v5、多用户、TLS、拥塞控制 |
+| VLESS Reality | `104:vless` | Reality、Vision；也支持普通 TCP/TLS、WS、gRPC、HTTPUpgrade |
+| Shadowsocks | `105:ss` 或 `105:shadowsocks` | TCP/UDP、多用户 AEAD 和 2022 AES |
 
-- Official xray-core Docker
-- XBoard node config sync
-- XBoard user sync
-- XBoard traffic report
-- Multi-node support
-- Multi-protocol support
-- systemd auto start
-- Restart on failure after 60 seconds
-- Health check script
+SS 支持 `aes-128-gcm`、`aes-192-gcm`、`aes-256-gcm`、`chacha20-ietf-poly1305`、`2022-blake3-aes-128-gcm`、`2022-blake3-aes-256-gcm`。
+SS2022 服务端密钥取面板 `server_key`，用户密钥按 XBoard `Helper::uuidToBase64` 从 UUID 前 16/32 个字符进行 Base64 编码。定制面板若使用其他密钥算法，需要调整转换逻辑。
 
-## Supported Protocols
+## 安装（Debian / Ubuntu，systemd）
 
-Supported by official xray-core:
-
-- VLESS
-- VLESS Reality
-- VMess
-- Trojan
-- Shadowsocks
-- Shadowsocks TCP/UDP
-
-Not supported by official xray-core:
-
-- AnyTLS
-- Hysteria2
-- TUIC
-
-Use sing-box for AnyTLS, Hysteria2, and TUIC.
-
-## Tested
-
-- VLESS Reality
-- Shadowsocks chacha20-ietf-poly1305
-
-## Important Notes
-
-Do not commit real secrets:
-
-- PANEL_TOKEN
-- Reality privateKey
-- Shadowsocks server_key
-- User UUID list
-- /opt/xray-sync/.env
-
-For Shadowsocks 2022:
-
-- 2022-blake3-aes-256-gcm requires valid base64 PSK for server and clients.
-- If your XBoard only returns UUID as user password, use chacha20-ietf-poly1305 or aes-128-gcm instead.
-
-## Quick Install
-
-bash <(curl -fsSL https://raw.githubusercontent.com/xiaofujie369/xboard-xray-docker-sync/main/install.sh)
-
-After installation, use the management menu:
-
-xbr
-
-## Manual Install
-
-git clone https://github.com/xiaofujie369/xboard-xray-docker-sync.git
-cd xboard-xray-docker-sync
-bash install.sh
-
-## Node List Format
-
-NODES=node_id:protocol,node_id:protocol
-
-Examples:
-
-NODES=3047:vless
-NODES=3047:vless,8881:shadowsocks
-NODES=3047:vless,8881:shadowsocks,8882:trojan,8883:vmess
-
-## Runtime Files
-
-/opt/xray
-/opt/xray/config/config.json
-/opt/xray/docker-compose.yml
-/opt/xray/logs/access.log
-/opt/xray-sync
-/opt/xray-sync/.env
-/opt/xray-sync/report_state.json
-/opt/xray-sync/xboard_sync.py
-/opt/xray-sync/xboard_report.py
-/opt/xray-sync/healthcheck.sh
-
-## Services
-
-systemctl status xboard-sync --no-pager
-systemctl status xboard-report --no-pager
-
-## Management Menu
-
-Run as root:
-
-xbr
-
-The longer `xray-sync` command is still installed as a compatibility alias.
-
-Menu features:
-
-- Edit panel config
-- Install, update, uninstall
-- Start, stop, restart services
-- View status and logs
-- Sync panel config now
-- Inspect generated node config
-- Check Xray config JSON and port conflicts
-- Check TLS certificate files and openssl output
-- Open generated node ports in ufw
-- Backup and restore config.json
-
-## Health Check
-
-/opt/xray-sync/healthcheck.sh
-
-## Traffic and Online Reporting
-
-xboard-report reads Xray Stats API and reports to XBoard through `/api/v2/server/report`.
-Each report includes node status, so the panel can keep the node online even when no user traffic is generated.
-
-It also reads /opt/xray/logs/access.log incrementally to report real user IPs and online counts.
-Recently active users are kept for `REPORT_ONLINE_TTL` seconds, default `180`, so online counts do not drop just because no new access log line appeared in the current report window.
-
-If online users or traffic are not visible, run:
-
-/opt/xray-sync/healthcheck.sh
-journalctl -u xboard-report -n 100 --no-pager
-
-## Update
-
-cd xboard-xray-docker-sync
-git pull
-bash update.sh
-
-## Uninstall
-
-bash uninstall.sh
-
-## Firewall
-
-Open all node ports in your server firewall and cloud security group.
-
-Example:
-
-ufw allow 31059/tcp
-ufw allow 45123/tcp
-ufw allow 45123/udp
-
-## License
-
-MIT
-
-## Custom Outbounds and Routes
-
-This project supports XBoard per-node custom outbounds and custom routes.
-
-You can configure different outbound rules for each node in XBoard.
-
-XBoard route groups selected on a node are also synced. `block`, `direct`, and `proxy` actions are compiled into Xray routing rules bound to that node inbound; `dns` actions are compiled into Xray DNS server rules. Dangerous global matchers such as `*`, `0.0.0.0/0`, and `::/0` are ignored in panel route groups by default, and wildcard default DNS routes are ignored unless `XRAY_ENABLE_PANEL_DEFAULT_DNS=true` is set.
-
-Custom outbounds are definitions only; they do not affect traffic until a custom route or panel proxy route references them. Per-node custom outbound tags are automatically scoped, so two nodes can both define `ss-us` without sharing the same outbound. Per-node custom routes are forced to the current node inbound; routes targeting another node inbound are ignored for stability.
-If a route references an outbound that is not defined on that node, that route is ignored instead of being written into Xray config.
-
-Example:
-
-- Node 249 uses VLESS Reality inbound on port 443
-- Node 249 custom outbound uses another upstream VLESS/TLS/Vision node
-- Only traffic from inbound tag `vless-443` will be routed to this outbound
-
-### Custom Route Example
-
-```json
-[
-  {
-    "type": "field",
-    "inboundTag": [
-      "vless-443"
-    ],
-    "outboundTag": "relay-vless-tls"
-  }
-]
-[
-  {
-    "tag": "relay-vless-tls",
-    "protocol": "vless",
-    "settings": {
-      "vnext": [
-        {
-          "address": "example.com",
-          "port": 443,
-          "users": [
-            {
-              "id": "YOUR-UPSTREAM-VLESS-UUID",
-              "encryption": "none",
-              "flow": "xtls-rprx-vision"
-            }
-          ]
-        }
-      ]
-    },
-    "streamSettings": {
-      "network": "tcp",
-      "security": "tls",
-      "tlsSettings": {
-        "serverName": "example.com",
-        "allowInsecure": false,
-        "fingerprint": "edge"
-      }
-    }
-  }
-]
-[
-  {
-    "type": "field",
-    "inboundTag": [
-      "vless-443"
-    ],
-    "outboundTag": "relay-vless-tls"
-  }
-]
-[
-  {
-    "tag": "relay-vless-reality",
-    "protocol": "vless",
-    "settings": {
-      "vnext": [
-        {
-          "address": "example.com",
-          "port": 443,
-          "users": [
-            {
-              "id": "YOUR-UPSTREAM-VLESS-UUID",
-              "encryption": "none",
-              "flow": "xtls-rprx-vision"
-            }
-          ]
-        }
-      ]
-    },
-    "streamSettings": {
-      "network": "tcp",
-      "security": "reality",
-      "realitySettings": {
-        "serverName": "www.microsoft.com",
-        "fingerprint": "edge",
-        "publicKey": "YOUR-REALITY-PUBLIC-KEY",
-        "shortId": "YOUR-REALITY-SHORT-ID",
-        "spiderX": "/"
-      }
-    }
-  }
-]
-[
-  {
-    "type": "field",
-    "inboundTag": [
-      "vless-443"
-    ],
-    "outboundTag": "relay-vless-reality"
-  }
-]
-[
-  {
-    "tag": "relay-trojan-tls",
-    "protocol": "trojan",
-    "settings": {
-      "servers": [
-        {
-          "address": "example.com",
-          "port": 443,
-          "password": "YOUR-TROJAN-PASSWORD"
-        }
-      ]
-    },
-    "streamSettings": {
-      "network": "tcp",
-      "security": "tls",
-      "tlsSettings": {
-        "serverName": "example.com",
-        "allowInsecure": false,
-        "fingerprint": "edge"
-      }
-    }
-  }
-]
-[
-  {
-    "type": "field",
-    "inboundTag": [
-      "vless-443"
-    ],
-    "outboundTag": "relay-trojan-tls"
-  }
-]
-[
-  {
-    "tag": "relay-shadowsocks",
-    "protocol": "shadowsocks",
-    "settings": {
-      "servers": [
-        {
-          "address": "example.com",
-          "port": 8388,
-          "method": "chacha20-ietf-poly1305",
-          "password": "YOUR-SHADOWSOCKS-PASSWORD"
-        }
-      ]
-    }
-  }
-]
-[
-  {
-    "type": "field",
-    "inboundTag": [
-      "vless-443"
-    ],
-    "outboundTag": "relay-shadowsocks"
-  }
-]
-[
-  {
-    "tag": "relay-socks5",
-    "protocol": "socks",
-    "settings": {
-      "servers": [
-        {
-          "address": "example.com",
-          "port": 1080,
-          "users": [
-            {
-              "user": "YOUR-SOCKS-USER",
-              "pass": "YOUR-SOCKS-PASSWORD"
-            }
-          ]
-        }
-      ]
-    }
-  }
-]
-[
-  {
-    "type": "field",
-    "inboundTag": [
-      "vless-443"
-    ],
-    "outboundTag": "relay-socks5"
-  }
-]
-[
-  {
-    "tag": "relay-http",
-    "protocol": "http",
-    "settings": {
-      "servers": [
-        {
-          "address": "example.com",
-          "port": 8080,
-          "users": [
-            {
-              "user": "YOUR-HTTP-USER",
-              "pass": "YOUR-HTTP-PASSWORD"
-            }
-          ]
-        }
-      ]
-    }
-  }
-]
-[
-  {
-    "type": "field",
-    "inboundTag": [
-      "vless-443"
-    ],
-    "outboundTag": "relay-http"
-  }
-]
-[
-  {
-    "type": "field",
-    "inboundTag": [
-      "vless-443"
-    ],
-    "outboundTag": "direct"
-  }
-]
-[
-  {
-    "type": "field",
-    "inboundTag": [
-      "vless-443"
-    ],
-    "outboundTag": "block"
-  }
-]
-
----
-
-## 3. 提交并推送
+先安装 Docker Engine、Docker Compose plugin 和 Git，然后克隆项目并安装：
 
 ```bash
-git status
+git clone https://github.com/xiaofujie369/xboard-xray-docker-any.git
+cd xboard-xray-docker-any
+sudo bash install.sh
+```
 
-git add sync/xboard_sync.py README.md
+按提示输入 **XBoard 面板 HTTPS 地址、通讯密钥、节点列表**：
 
-git commit -m "Support XBoard per-node custom outbounds and add outbound examples"
+```ini
+PANEL_URL=https://panel.example.com
+PANEL_TOKEN=你的面板通讯密钥
+NODES=101:anytls,102:hysteria2,103:tuic,104:vless,105:ss
+INTERVAL=60
+```
 
-git push
+这份配置存放在 `/opt/singbox-sync/.env`，不加引号。节点 ID 替换成你的实际 ID。
+安装器从官方源码构建固定版本 `1.12.25`，首次构建需要访问 GitHub、Go 模块服务器和容器镜像仓库。
 
-## Custom Outbounds
+### TLS 证书
 
-This project supports XBoard per-node custom outbounds and custom routes.
+AnyTLS、Hysteria2、TUIC 和普通 VLESS TLS 节点需要有效证书。
+每个节点单独放置证书；例如 101 节点：
 
-See:
+```bash
+sudo install -d -m 700 /opt/singbox/config/certs/101
+sudo install -m 600 /你的证书目录/fullchain.pem /opt/singbox/config/certs/101/fullchain.pem
+sudo install -m 600 /你的证书目录/privkey.pem /opt/singbox/config/certs/101/privkey.pem
+```
 
-docs/custom-outbounds.md
+其他 TLS 节点同样处理，可复制同一域名适用的证书。面板中的 SNI 应与证书一致。
+本项目不自动申请证书，也不自动读取面板的 PEM 内容。证书续期后将新文件复制到上述路径，下一次同步会检测变化并重启加载。
+**VLESS Reality 和 SS 不需要这些证书。** Reality 私钥、握手域名、short_id 从面板读取。
 
-Supported common custom outbound examples:
+证书准备好后初始化并启动：
 
-- VLESS + TLS + Vision
-- VLESS + TLS
-- VLESS + Reality
-- Trojan + TLS
-- Shadowsocks
-- SOCKS5
-- HTTP Proxy
-- Direct route
-- Block route
+```bash
+sudo xbs init
+sudo xbs status
+sudo xbs logs
+```
+
+`init` 只用于首次部署；已有配置使用 `xbs start` 或 `xbs sync`。
+开放面板设置的节点端口：AnyTLS / VLESS 使用 TCP，Hysteria2 / TUIC 使用 UDP，SS 使用 TCP 和 UDP。云安全组也要开放。
+
+## 管理
+
+```bash
+sudo xbs edit        # 修改面板地址、密钥、节点列表
+sudo xbs sync        # 立即执行上报和同步
+sudo xbs check       # 使用核心检查当前配置
+sudo xbs logs        # 同步/上报日志
+sudo xbs core-logs   # 核心连接日志（含用户标识和地址，分享前脱敏）
+sudo xbs stop
+sudo xbs start
+```
+
+运行路径：
+
+| 路径 | 内容 |
+| --- | --- |
+| `/opt/singbox/config/config.json` | 自动生成的配置，不要手动修改 |
+| `/opt/singbox/config/config.previous.json` | 上一次配置 |
+| `/opt/singbox/config/certs/<ID>/` | TLS 证书 |
+| `/opt/singbox/docker-compose.yml` | 核心容器定义 |
+| `/opt/singbox-sync/.env` | XBoard 对接信息 |
+| `/opt/singbox-sync/state.json` | 流量采样断点与待上报队列，不要随意删除 |
+| `/opt/singbox-sync/routes.json` | 可选的 sing-box 原生出站/路由 |
+
+容器名 `xboard-singbox`，服务名 `xboard-singbox.service`，命令 `xbs`。路径、名称与原 Xray 项目分开，端口仍需避免冲突。不要让两套服务同时对接同一个面板节点 ID，以免流量和状态混淆。
+
+## 流量与变更行为
+
+- 配置和用户通过 `/api/v1/server/UniProxy/config`、`user` 拉取，流量和节点状态通过 `/api/v2/server/report` 上报。
+- 使用启用 `with_v2ray_api` 的官方源码构建；官方发行包默认不含该统计功能。API 仅监听 `127.0.0.1:10086`，不要映射或开放这个端口。
+- 用户名采用 `节点ID:用户ID`，同一用户在多个节点的流量分别统计。
+- 读取累计计数、不执行 reset；差值与待上报队列先写磁盘，再请求面板。失败时保留待发送流量；成功的节点不重复发送该批流量。
+- 面板未提供幂等键，因此网络超时但面板实际已入账，或面板成功后进程来不及保存状态的极端情况下，重试可能重复入账；不承诺 exactly-once。
+- 配置变化先用 `sing-box check` 校验，再保存上一版并重启；启动失败尝试回滚。无变化不重启。面板用户列表为空时删除对应入口，确保旧用户失效。
+- 同步进程与命令行采用文件锁，避免并发同步和重复计费。程序控制的重启前会采样保存；采样到重启之间、异常退出或手动重启期间尚未采样的流量仍可能丢失。
+- 密钥变更可编辑 `.env`；切换到另一面板需要先处理旧面板待上报数据，程序不会把旧流量自动发往新面板。
+
+## 当前边界
+
+本版本上报**用户流量和节点状态**，尚未实现真实用户在线 IP / 在线设备数上报，不伪造在线数据。设备数限制、单用户限速、面板审计规则尚未实现。
+
+不支持 Hysteria v1、TUIC v4、SS 插件、Xray 的 XHTTP / mKCP / VLESS encryption。Xray 格式的自定义出站和面板路由不能直接照搬；检测到这些设置时同步会报错并保留原配置。需要路由时使用 sing-box 原生 `routes.json`，见 [示例](docs/routes.example.json)。
+
+配置或证书变动采用重启加载，现有连接会断开；当前不是无损热更新。上报仅支持原项目使用的 XBoard v2 report API，旧面板不自动降级。定制面板的字段差异需用真实响应继续验证。
+
+## 更新 / 卸载
+
+上传新版本后在项目目录执行 `sudo bash update.sh`：更新 Python 同步程序，保留配置、证书、统计状态，不自动升级核心镜像。
+核心版本变更应先在测试节点验证，再手动构建并部署，避免未经验证的自动升级。
+
+`sudo bash uninstall.sh` 停止并卸载服务，保留 `/opt/singbox` 和 `/opt/singbox-sync` 下的文件供备份。
+
+## 验证
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+python -m unittest discover -s tests -v
+bash -n install.sh update.sh uninstall.sh sync/manage.sh
+python tests/check_configs.py /path/to/sing-box
+python tests/runtime_stats.py /path/to/sing-box
+```
+
+后两个命令需要包含 `with_v2ray_api` 的核心。仅检查官方发行包的协议配置时，可用 `check_configs.py ... --without-stats`。
+CI 会构建实际 Docker 核心、检查各协议配置，并通过 VLESS、AnyTLS、Hysteria2、TUIC、SS 的真实连接验证 gRPC 用户流量统计。
+当前本地验证情况见 [VALIDATION.md](docs/VALIDATION.md)。尚未连接你的真实面板或部署到你的节点服务器。
+
+## 参考
+
+- [原项目](https://github.com/xiaofujie369/xboard-xray-docker-sync)，参考提交 `5b826230b44d8d7e579dff392e2998d817877a4f`。
+- [sing-box 1.12.25 官方源码](https://github.com/SagerNet/sing-box/tree/v1.12.25)，启用 `with_quic,with_utls,with_v2ray_api`。
+- [V2Ray API 文档](https://sing-box.sagernet.org/configuration/experimental/v2ray-api/)。
+- [XBoard 节点配置生成](https://github.com/cedar2025/Xboard/blob/master/app/Services/ServerService.php) 与 [订阅生成](https://github.com/cedar2025/Xboard/blob/master/app/Protocols/SingBox.php)。

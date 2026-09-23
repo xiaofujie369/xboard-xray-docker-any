@@ -1,0 +1,13 @@
+{
+  "outbounds": [],
+  "route": {
+    "rules": [
+      {
+        "inbound": ["node-101"],
+        "domain_suffix": ["example.invalid"],
+        "action": "reject"
+      }
+    ],
+    "final": "direct"
+  }
+}

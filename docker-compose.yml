@@ -1,0 +1,15 @@
+services:
+  singbox:
+    image: xboard-singbox:1.12.25
+    build: .
+    container_name: xboard-singbox
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /opt/singbox/config:/etc/sing-box:ro
+    command: ["run", "-c", "/etc/sing-box/config.json"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
