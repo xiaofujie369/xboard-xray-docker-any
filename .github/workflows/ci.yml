@@ -20,3 +20,4 @@ jobs:
           chmod +x /tmp/sing-box
       - run: python tests/check_configs.py /tmp/sing-box
       - run: python tests/runtime_stats.py /tmp/sing-box
+      - run: python tests/runtime_routes.py /tmp/sing-box

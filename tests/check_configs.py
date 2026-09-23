@@ -36,12 +36,19 @@ def main():
             ('shadowsocks', {'cipher': '2022-blake3-aes-128-gcm', 'server_key': base64.b64encode(b'x'*16).decode()}),
         ]
         for index, (protocol, fields) in enumerate(variants):
-            inbound = config.inbound(str(index + 1), protocol, {'server_port': 20000 + index, **fields}, user)
+            node = str(index + 1)
+            panel = {'server_port': 20000 + index, **fields, 'routes': [
+                {'action': 'block', 'match': ['full:blocked.example', '192.0.2.0/24']},
+                {'action': 'dns', 'match': ['*'], 'action_value': '1.1.1.1'},
+                {'action': 'dns', 'match': ['# 电商', 'taobao.com', '*.taobao.com'],
+                 'action_value': '223.5.5.5,119.29.29.29,2400:3200::1,2402:4e00::'},
+                {'action': 'dns', 'match': ['full:encrypted.test'], 'action_value': 'https://dns.example.com/dns-query'}]}
+            inbound = config.inbound(node, protocol, panel, user)
             tls = inbound.get('tls', {})
             if 'certificate_path' in tls:
                 tls['certificate_path'] = str(directory / 'cert.pem')
                 tls['key_path'] = str(directory / 'key.pem')
-            generated = config.build([inbound])
+            generated = config.build([inbound], panels={node: panel})
             if skip_stats:
                 generated.pop('experimental')
             path = directory / 'config.json'

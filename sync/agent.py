@@ -165,12 +165,14 @@ class Agent:
 
     def desired(self):
         inbounds = []
+        panels = {}
         for node, protocol in config.nodes(self.env['NODES']):
             server = self.panel.fetch(node, protocol, 'config')
             user_response = self.panel.fetch(node, protocol, 'user')
             inbounds.append(config.inbound(node, protocol, server, user_response))
+            panels[node] = config.unwrap(server)
         routes = ROOT / 'routes.json'
-        return config.build(inbounds, json.loads(routes.read_text()) if routes.exists() else None)
+        return config.build(inbounds, json.loads(routes.read_text()) if routes.exists() else None, panels)
 
     def sync(self, initial=False):
         if initial and (CORE / 'config.json').exists():

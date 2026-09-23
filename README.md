@@ -104,13 +104,50 @@ sudo xbs start
 
 本版本上报**用户流量和节点状态**，尚未实现真实用户在线 IP / 在线设备数上报，不伪造在线数据。设备数限制、单用户限速、面板审计规则尚未实现。
 
-不支持 Hysteria v1、TUIC v4、SS 插件、Xray 的 XHTTP / mKCP / VLESS encryption。Xray 格式的自定义出站和面板路由不能直接照搬；检测到这些设置时同步会报错并保留原配置。需要路由时使用 sing-box 原生 `routes.json`，见 [示例](docs/routes.example.json)。
+不支持 Hysteria v1、TUIC v4、SS 插件、Xray 的 XHTTP / mKCP / VLESS encryption。面板的 `routes` 路由组可自动转换，见下节；Xray 格式的 `custom_routes` / `custom_outbounds` 仍需迁移为 sing-box 原生 `routes.json`，见 [示例](docs/routes.example.json)。
 
 配置或证书变动采用重启加载，现有连接会断开；当前不是无损热更新。上报仅支持原项目使用的 XBoard v2 report API，旧面板不自动降级。定制面板的字段差异需用真实响应继续验证。
 
+## XBoard 面板路由
+
+节点关联的路由组随 `config` API 中的 `routes` 拉取，不需要在本地重复填写。
+
+| 面板动作 | sing-box 行为 |
+| --- | --- |
+| `block` | 阻断匹配目标 |
+| `direct` | 匹配目标直连 |
+| `proxy` | 使用 `action_value` 指定的出站标签；须先在本地 `routes.json` 中定义该出站 |
+| `dns` | 为匹配域名选择 DNS，并在实际连接前使用该 DNS 解析目标 |
+
+支持普通域名、`*.域名`、`domain:`、`full:`、`keyword:`、`regexp:`、IPv4/IPv6 CIDR，以及 `#` / `//` / `;` 开头的注释。普通域名和 `*.域名` 均匹配该域名及其子域。不同类别的匹配项使用“或”关系。
+`*` / `*.*` 表示该节点所有目标；在 DNS 路由中，`0.0.0.0/0` / `::/0` 也视为默认 DNS 匹配。默认 DNS 规则统一排到具体域名 DNS 规则之后。
+
+例如面板里填：
+
+```text
+# 常用电商类
+taobao.com
+*.taobao.com
+tmall.com
+*.tmall.com
+jd.com
+*.jd.com
+```
+
+动作选“指定 DNS 服务器进行解析”，填 `223.5.5.5,119.29.29.29,2400:3200::1,2402:4e00::`，即可自动转换。
+DNS 地址支持 IPv4、IPv6、`local`、`udp://`、`tcp://`、`tls://`、`https://`、`quic://`；IPv6 带端口使用 `udp://[IPv6]:5353` 格式。
+
+**多个 DNS 地址都会导入，但当前使用列表中的第一个地址；没有自动故障切换或并发竞速。** 程序会在日志中提示这一点。
+DNS 规则只控制 sing-box 对目标域名的解析，不会强行改写客户端自行发送到其他 DNS 服务的查询。客户端若只提供目标 IP，也不能根据缺失的域名命中域名分流。
+
+所有面板规则都限定到关联节点，DNS 缓存按解析器隔离。阻断/直连/代理规则保持面板返回的先后顺序；面板规则优先于本地规则。具体域名 DNS 优先于默认 DNS，均优先于本地 DNS 规则。
+不认识的动作、无效字段或未定义的代理出站会停止本次配置更新并保留旧配置，不静默丢弃阻断规则。
+旧的 `geosite:` / `geoip:国家代码` 不直接兼容 sing-box 1.12；可在本地 `route.rule_set` 定义规则集后使用 `rule-set:标签`。`geoip:private` 支持用于普通流量路由。
+
 ## 更新 / 卸载
 
-上传新版本后在项目目录执行 `sudo bash update.sh`：更新 Python 同步程序，保留配置、证书、统计状态，不自动升级核心镜像。
+在项目目录执行 `git pull --ff-only` 后运行 `sudo bash update.sh`：更新 Python 同步程序，保留配置、证书、统计状态和服务原先的运行状态，不自动升级核心镜像。
+如果此前在首次初始化时因面板路由报错，更新后重新运行 `sudo xbs init`；已运行的节点使用 `sudo xbs sync`。
 核心版本变更应先在测试节点验证，再手动构建并部署，避免未经验证的自动升级。
 
 `sudo bash uninstall.sh` 停止并卸载服务，保留 `/opt/singbox` 和 `/opt/singbox-sync` 下的文件供备份。
@@ -125,9 +162,10 @@ python -m unittest discover -s tests -v
 bash -n install.sh update.sh uninstall.sh sync/manage.sh
 python tests/check_configs.py /path/to/sing-box
 python tests/runtime_stats.py /path/to/sing-box
+python tests/runtime_routes.py /path/to/sing-box
 ```
 
-后两个命令需要包含 `with_v2ray_api` 的核心。仅检查官方发行包的协议配置时，可用 `check_configs.py ... --without-stats`。
+核心验证脚本需要包含 `with_v2ray_api` 的核心。仅检查官方发行包的协议配置时，可用 `check_configs.py ... --without-stats`。
 CI 会构建实际 Docker 核心、检查各协议配置，并通过 VLESS、AnyTLS、Hysteria2、TUIC、SS 的真实连接验证 gRPC 用户流量统计。
 当前本地验证情况见 [VALIDATION.md](docs/VALIDATION.md)。尚未连接你的真实面板或部署到你的节点服务器。
 

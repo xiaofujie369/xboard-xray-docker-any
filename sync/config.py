@@ -3,6 +3,7 @@ import base64
 import copy
 import json
 import uuid
+import panel_routes
 
 
 def obj(value):
@@ -97,8 +98,8 @@ def inbound(node, protocol, response, user_response):
         raise ValueError('仅支持 TUIC v5')
     if server.get('decryption') not in (None, '', 'none'):
         raise ValueError('sing-box 不支持 Xray VLESS encryption')
-    if any(server.get(k) for k in ('routes', 'custom_routes', 'custom_outbounds')):
-        raise ValueError('面板路由不能直接转换；请移除这些设置并使用本地 routes.json')
+    if any(server.get(k) for k in ('custom_routes', 'custom_outbounds')):
+        raise ValueError('Xray 自定义出站/路由请迁移至本地 sing-box routes.json；面板 routes 路由组可自动转换')
     parsed = users(user_response)
     # No inbound is safer than a zero-user Shadowsocks falling back to single-user mode.
     if not parsed:
@@ -175,7 +176,7 @@ def inbound(node, protocol, response, user_response):
     return result
 
 
-def build(inbounds, local=None):
+def build(inbounds, local=None, panels=None):
     active = [i for i in inbounds if i]
     occupied = set()
     for item in active:
@@ -197,4 +198,5 @@ def build(inbounds, local=None):
             if key in local:
                 result[key] = local[key]
         result['outbounds'] += local.get('outbounds', [])
+    panel_routes.apply(result, panels or {})
     return result

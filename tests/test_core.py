@@ -61,7 +61,7 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             config.build([item, item])
         with self.assertRaises(ValueError):
-            config.inbound('1', 'vless', {'server_port': 443, 'routes': [{'action': 'block'}]}, USERS)
+            config.inbound('1', 'vless', {'server_port': 443, 'custom_routes': [{'action': 'block'}]}, USERS)
 
     def test_quic_specific_fields(self):
         item = config.inbound('1', 'hysteria', {'server_port': 443, 'version': 2,
