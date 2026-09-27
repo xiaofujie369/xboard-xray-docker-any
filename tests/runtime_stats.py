@@ -42,6 +42,7 @@ def run_case(executable, protocol, fields):
     inbound = config.inbound('1', protocol, {'server_port': 20981, 'listen_ip': '127.0.0.1', **fields},
                              {'users': [{'id': 7, 'uuid': secret}]})
     server = config.build([inbound])
+    server['route']['user_limits'] = {'scope': 'user', 'defaults': {'max_tcp': 2, 'max_udp': 2, 'max_total': 3}}
     outbound = {'type': inbound['type'], 'server': '127.0.0.1', 'server_port': 20981}
     if protocol in ('vless', 'tuic'):
         outbound['uuid'] = secret

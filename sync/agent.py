@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 import requests
 
 import config
+import limits
 import stats
 from status import collect_status
 
@@ -137,6 +138,7 @@ class Agent:
         if generation() != before:
             raise RuntimeError('采样时核心发生重启，稍后重试')
         self.state = accumulate(self.state, current, before)
+        self.state['last_snapshot'] = int(time.time())
         mapping = self.state.setdefault('node_types', {})
         mapping.update(dict(config.nodes(self.env['NODES'])))
         atomic(self.state_path, self.state)
@@ -155,6 +157,7 @@ class Agent:
                 failures.append(node)
                 continue
             self.state.setdefault('pending', {}).pop(node, None)
+            self.state.setdefault('last_report', {})[node] = int(time.time())
             atomic(self.state_path, self.state)
         if failures:
             raise RuntimeError('上报失败，流量已保存在本地等待重试；节点: ' + ','.join(failures))
@@ -172,9 +175,13 @@ class Agent:
             inbounds.append(config.inbound(node, protocol, server, user_response))
             panels[node] = config.unwrap(server)
         routes = ROOT / 'routes.json'
-        return config.build(inbounds, json.loads(routes.read_text()) if routes.exists() else None, panels)
+        desired = config.build(inbounds, json.loads(routes.read_text()) if routes.exists() else None, panels)
+        policy = limits.policy(ROOT / 'limits.json')
+        if policy is not None:
+            desired['route']['user_limits'] = policy
+        return desired
 
-    def sync(self, initial=False):
+    def sync(self, initial=False, recreate=False):
         if initial and (CORE / 'config.json').exists():
             raise RuntimeError('已有核心配置，请使用 xbs start 或 xbs sync')
         desired = self.desired()
@@ -189,7 +196,7 @@ class Agent:
                     relative = Path(tls[key]).relative_to('/etc/sing-box')
                     digest.update((CORE / relative).read_bytes())
         fingerprint = digest.hexdigest()
-        if active.exists() and active.read_text(encoding='utf-8') == text and self.state.get('config_hash') == fingerprint:
+        if not recreate and active.exists() and active.read_text(encoding='utf-8') == text and self.state.get('config_hash') == fingerprint:
             return False
         candidate = CORE / 'candidate.json'
         atomic(candidate, text)
@@ -208,7 +215,9 @@ class Agent:
             atomic(CORE / 'config.previous.json', backup)
         atomic(active, text)
         try:
-            if initial:
+            if recreate:
+                command('docker', 'compose', '-f', '/opt/singbox/docker-compose.yml', 'up', '-d', '--no-build', '--force-recreate')
+            elif initial:
                 command('docker', 'compose', '-f', '/opt/singbox/docker-compose.yml', 'up', '-d')
             else:
                 command('docker', 'restart', CONTAINER)
@@ -216,8 +225,9 @@ class Agent:
         except Exception:
             if backup is not None:
                 atomic(active, backup)
-                command('docker', 'restart', CONTAINER)
-                self.wait_ready()
+                if not recreate:  # The upgrade worker restores the previous image as well.
+                    command('docker', 'restart', CONTAINER)
+                    self.wait_ready()
             elif initial:
                 command('docker', 'compose', '-f', '/opt/singbox/docker-compose.yml', 'stop')
                 active.unlink(missing_ok=True)
@@ -244,6 +254,9 @@ def main():
     parser.add_argument('--env', default=str(ROOT / '.env'))
     parser.add_argument('--init', action='store_true')
     parser.add_argument('--once', action='store_true')
+    parser.add_argument('--prepare', action='store_true', help='Write a checked candidate without restarting')
+    parser.add_argument('--report-only', action='store_true')
+    parser.add_argument('--upgrade-core', action='store_true')
     args = parser.parse_args()
     # Serialize CLI actions with the daemon; prevents duplicate billing and overlapping restarts.
     import fcntl
@@ -251,6 +264,17 @@ def main():
     with (ROOT / 'agent.lock').open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         agent = Agent(load_env(args.env))
+        if args.upgrade_core:
+            agent.sync(recreate=True)
+            return
+        if args.report_only:
+            agent.report()
+            return
+        if args.prepare:
+            atomic(CORE / 'candidate.json', agent.desired())
+            command('docker', 'compose', '-f', '/opt/singbox/docker-compose.yml', 'run', '--rm', '--no-deps',
+                    'singbox', 'check', '-c', '/etc/sing-box/candidate.json')
+            return
         if args.init:
             agent.sync(initial=True)
             return

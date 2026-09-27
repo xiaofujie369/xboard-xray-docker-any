@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "scope": "user",
+  "defaults": {
+    "max_tcp": 128,
+    "max_udp": 64,
+    "max_total": 192,
+    "new_per_second": 20,
+    "burst": 40
+  },
+  "users": {}
+}

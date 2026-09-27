@@ -1,6 +1,6 @@
 services:
   singbox:
-    image: xboard-singbox:1.12.25
+    image: xboard-singbox:1.12.25-xbs1
     build: .
     container_name: xboard-singbox
     restart: unless-stopped

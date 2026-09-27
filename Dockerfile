@@ -1,10 +1,14 @@
 FROM golang:1.25-alpine AS builder
 ARG SING_BOX_VERSION=1.12.25
-RUN apk add --no-cache git
+RUN apk add --no-cache git python3
 WORKDIR /src
 RUN git clone --depth 1 --branch v${SING_BOX_VERSION} https://github.com/SagerNet/sing-box.git .
+RUN test "$(git rev-parse HEAD)" = 73bfb99ebce7923c485435e4faf8571b412065a9
+COPY core /overlay
+RUN python3 /overlay/apply.py /src && gofmt -w option/user_limits.go route/user_limits*.go \
+    && CGO_ENABLED=0 go test -tags with_quic,with_utls,with_v2ray_api ./route -run TestUserLimits
 RUN CGO_ENABLED=0 go build -trimpath -tags with_quic,with_utls,with_v2ray_api \
-    -ldflags "-s -w -X github.com/sagernet/sing-box/constant.Version=${SING_BOX_VERSION}" \
+    -ldflags "-s -w -X github.com/sagernet/sing-box/constant.Version=${SING_BOX_VERSION}-xbs1" \
     -o /sing-box ./cmd/sing-box
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata

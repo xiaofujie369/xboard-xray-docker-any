@@ -1,6 +1,6 @@
 # XBoard sing-box Docker Sync
 
-基于 [xboard-xray-docker-sync](https://github.com/xiaofujie369/xboard-xray-docker-sync) 的独立 sing-box 版本。使用官方 sing-box 源码构建 Docker 核心，以 Python 对接 XBoard：同步节点配置、同步用户、按用户统计上传/下载流量、向面板上报节点状态。
+基于 [xboard-xray-docker-sync](https://github.com/xiaofujie369/xboard-xray-docker-sync) 的独立 sing-box 版本。使用固定版本 sing-box 源码加本项目的用户会话限额补丁构建 Docker 核心，以 Python 对接 XBoard：同步节点配置、同步用户、按用户统计上传/下载流量、向面板上报节点状态。
 
 ## 协议
 
@@ -35,7 +35,7 @@ INTERVAL=60
 ```
 
 这份配置存放在 `/opt/singbox-sync/.env`，不加引号。节点 ID 替换成你的实际 ID。
-安装器从官方源码构建固定版本 `1.12.25`，首次构建需要访问 GitHub、Go 模块服务器和容器镜像仓库。
+安装器从固定的上游 `1.12.25` 源码构建带限额补丁的 `1.12.25-xbs1`，首次构建需要访问 GitHub、Go 模块服务器和容器镜像仓库。这是本项目的修改版本，并非官方发行包；补丁、固定提交及 GPL 许可证见 [core](core/) 和 [NOTICE.md](NOTICE.md)。
 
 ### TLS 证书
 
@@ -148,10 +148,50 @@ DNS 规则只控制 sing-box 对目标域名的解析，不会强行改写客户
 ## 更新 / 卸载
 
 在项目目录执行 `git pull --ff-only` 后运行 `sudo bash update.sh`：更新 Python 同步程序，保留配置、证书、统计状态和服务原先的运行状态，不自动升级核心镜像。
+首次启用会话限额需要升级修改后的核心：
+
+```bash
+git pull --ff-only
+sudo bash update.sh --core
+sudo journalctl -u xbs-upgrade -f
+```
+
+升级任务由 systemd 在后台执行，命令返回只表示已提交。等待日志出现“核心与同步程序升级成功”后，用 `sudo xbs status` 确认服务状态、最近成功上报时间和待提交流量。先构建镜像、测试并校验配置，切换前保存流量统计；失败自动恢复旧核心及配置，统计进度不倒退。备份保留在 `/opt/singbox-sync/upgrade-*`。构建期间旧节点照常运行，切换时已有连接会断开。
+
+`xbs init`、`xbs sync` 同样在后台执行，查看 `journalctl -u xbs-operation -f`。已有配置再次 `init` 会按同步处理；失败退出仍恢复已有节点的同步服务。即使本次 SSH 经节点转发，断线也不会中断后台任务。
 如果此前在首次初始化时因面板路由报错，更新后重新运行 `sudo xbs init`；已运行的节点使用 `sudo xbs sync`。
-核心版本变更应先在测试节点验证，再手动构建并部署，避免未经验证的自动升级。
+普通 Python 更新不创建 `limits.json`，因此兼容未修改的旧核心；不要向官方核心配置添加 `user_limits` 字段。
 
 `sudo bash uninstall.sh` 停止并卸载服务，保留 `/opt/singbox` 和 `/opt/singbox-sync` 下的文件供备份。
+
+## 每用户会话限额
+
+新安装及 `update.sh --core` 默认创建 `/opt/singbox-sync/limits.json`，已有文件不覆盖。使用 `sudo xbs limits` 编辑，再运行 `sudo xbs sync` 应用。
+
+```json
+{
+  "enabled": true,
+  "scope": "user",
+  "defaults": {
+    "max_tcp": 128,
+    "max_udp": 64,
+    "max_total": 192,
+    "new_per_second": 20,
+    "burst": 40
+  },
+  "users": {
+    "123": {"max_tcp": 32, "max_udp": 16, "max_total": 48, "new_per_second": 8, "burst": 16}
+  }
+}
+```
+
+`123` 换成面板用户 ID；用户配置中省略的值继承 defaults。`scope: user` 按同一核心内的用户 ID 合并所有节点；`node_user` 则分别计数，此时 users 的键写成 `节点ID:用户ID`。共享中转 IP 不影响识别。
+
+TCP、UDP 及总并发上限同时生效。`new_per_second` 是新会话尝试速率，令牌桶最多积累 `burst` 次突发；达到并发上限的尝试也消耗令牌。0 表示该项不限，速率与 burst 必须同时为零才能禁用速率限制。`enabled: false` 关闭管理文件中的限额。
+
+限额在认证完成后、DNS/出站连接创建前判断，超额只拒绝新会话，已接纳的会话继续传输，关闭后释放名额。核心日志每用户最多 30 秒输出一次 `user-limit` 拒绝统计。UDP 统计的是关联会话，并非数据包数；TCP 复用按交给路由的逻辑流统计。因此这些数值不能直接与 `ss` 的系统套接字总数比较。
+
+计数仅在当前核心进程内有效，重启后清空；不跨服务器协调，不代替带宽限速、在线设备限制或认证前的攻击防护。无认证用户的连接不参与计数。仍未实现面板在线 IP 上报，因此面板显示用户离线不能据此判断该用户没有流量。
 
 ## 验证
 
@@ -160,15 +200,16 @@ python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 python -m unittest discover -s tests -v
-bash -n install.sh update.sh uninstall.sh sync/manage.sh
+bash -n install.sh update.sh upgrade-core.sh uninstall.sh sync/manage.sh
 python tests/check_configs.py /path/to/sing-box
 python tests/runtime_stats.py /path/to/sing-box
 python tests/runtime_routes.py /path/to/sing-box
+python tests/runtime_limits.py /path/to/patched-sing-box
 ```
 
 核心验证脚本需要包含 `with_v2ray_api` 的核心。仅检查官方发行包的协议配置时，可用 `check_configs.py ... --without-stats`。
 CI 会构建实际 Docker 核心、检查各协议配置，并通过 VLESS、AnyTLS、Hysteria2、TUIC、SS 的真实连接验证 gRPC 用户流量统计。
-当前本地验证情况见 [VALIDATION.md](docs/VALIDATION.md)。尚未连接你的真实面板或部署到你的节点服务器。
+验证记录见 [VALIDATION.md](docs/VALIDATION.md)。生产部署需另行核实服务器上的版本和服务状态。
 
 ## 参考
 

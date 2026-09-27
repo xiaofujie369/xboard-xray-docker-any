@@ -10,7 +10,7 @@ User=root
 UMask=0077
 WorkingDirectory=/opt/singbox-sync
 ExecStart=/opt/singbox-sync/venv/bin/python /opt/singbox-sync/agent.py
-Restart=on-failure
+Restart=always
 RestartSec=15
 
 [Install]

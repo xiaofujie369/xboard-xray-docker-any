@@ -14,6 +14,9 @@ apt-get install -y python3 python3-venv ca-certificates
 install -d -m 700 /opt/singbox/config/certs /opt/singbox-sync
 install -m 600 docker-compose.yml Dockerfile /opt/singbox/
 install -m 600 .dockerignore /opt/singbox/
+install -d -m 700 /opt/singbox/core
+install -m 600 core/* /opt/singbox/core/
+install -m 600 limits.example.json /opt/singbox-sync/limits.json
 install -m 600 sync/*.py requirements.txt /opt/singbox-sync/
 install -m 755 sync/manage.sh /usr/local/bin/xbs
 install -m 644 systemd/xboard-singbox.service /etc/systemd/system/
